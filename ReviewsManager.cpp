@@ -8,6 +8,8 @@
 #include <format>
 #include <sstream>
 
+using json = nlohmann::json;
+
 const std::string REVIEWS_DATABASE_NAME = "SteamReviews";
 
 cReviewsManager* cReviewsManager::s_instance(nullptr);
@@ -37,9 +39,12 @@ void cReviewsManager::DestroyInstance()
 	}
 }
 
-bool cReviewsManager::Init( const std::string& steamAppID )
+bool cReviewsManager::Init( const std::string& steamAppID, const std::string& openAIKey )
 {
+	LOG( "Init for steamapp id %s", steamAppID.c_str() );
+
 	m_steamAppID	= steamAppID;
+	m_openAIKey		= openAIKey;
 	m_reviewsDB		= std::make_unique<cReviewsDB>();
 
 	std::string dbName = REVIEWS_DATABASE_NAME + "_" + m_steamAppID + ".db";
@@ -49,22 +54,12 @@ bool cReviewsManager::Init( const std::string& steamAppID )
 
 	m_reviewsDB->ResetReviewsTable();
 
-	#if 0	
-	tReview rev;
-	rev.steamid = 76561198067767552;
-	rev.recommended = true;
-	rev.review = "free, but I want a refund.";
-	rev.timestampCreated = 1668950226;
-	m_reviewsDB->AddReviewEntry( rev );
-	m_reviewsDB->AddReviewEntry( rev );
-	rev.timestampCreated = 1700486226;
-	rev.steamid = 76561198067767553;
-	m_reviewsDB->AddReviewEntry( rev );
-	#endif
+	tReview firstEntry;
+	m_reviewsDB->GetFirstEntry( firstEntry, true );		//oldest
+	m_oldestTimestamp = firstEntry.timestampCreated;
 
-	tReview rev2;
-	m_reviewsDB->GetOldestEntry( rev2 );
-	m_oldestTimestamp = rev2.timestampCreated;
+	m_reviewsDB->GetFirstEntry( firstEntry, false );	//newest
+	m_newestTimestamp = firstEntry.timestampCreated;
 
 	return true;
 }
@@ -80,6 +75,8 @@ void cReviewsManager::Cleanup()
 
 void cReviewsManager::ExportReviews(const std::string& startDate, const std::string& endDate)
 {
+	LOG( "Query and export reviews between '%s' and '%s'", startDate.c_str(), endDate.c_str() );
+
 	if (!m_reviewsDB)
 	{
 		LOG("error on ExportReviews > no db was opened");
@@ -107,24 +104,30 @@ void cReviewsManager::ExportReviews(const std::string& startDate, const std::str
 
 	if (m_oldestTimestamp == 0 || startDateUTC < m_oldestTimestamp)
 	{
+		LOG( "start date older than oldest timestamp cached (%s vs. %s)", startDate.c_str(), GetTimeFromTimestamp(m_oldestTimestamp).c_str() );
 		DownloadReviews(startDateUTC);
-
-		if( m_reviewsDB )
-			m_reviewsDB->GetReviews( startDateUTC, endDateUTC, reviews );
 	}
-	else
+	else if ( m_newestTimestamp == 0 || endDateUTC > m_newestTimestamp)
 	{
-		//query where review.timestampCreated in [startDateUTC, endDateUTC]
-		if( m_reviewsDB )
-			m_reviewsDB->GetReviews( startDateUTC, endDateUTC, reviews );
+		LOG( "end date newer than newest timestamp cached", endDate.c_str(), GetTimeFromTimestamp(m_newestTimestamp).c_str() );
+		DownloadReviews(endDateUTC);
 	}
+
+	LOG( "Query reviews from cache" );
+
+	if( m_reviewsDB )
+		m_reviewsDB->GetReviews( startDateUTC, endDateUTC, reviews );
 
 	ExportToCSV( reviews );
+
+	std::string	reviewsSummary = SummarizeReviews( reviews );
+
+	FormatAndExportSummary( reviewsSummary );
 }
 
 void cReviewsManager::DownloadReviews(uint64_t untilTimestamp)
 {
-	LOG("Download reviews");
+	LOG("Download reviews from now to %s", GetTimeFromTimestamp(untilTimestamp).c_str() );
 
 	auto replaceQuotes = [](std::string& str)
 	{
@@ -143,12 +146,12 @@ void cReviewsManager::DownloadReviews(uint64_t untilTimestamp)
 	{
 		std::string		apiCall			= std::format("http://store.steampowered.com/appreviews/{}?json=1&num_per_page=20&review_type=all&filter=recent&day_range={}&language=all&purchase_type=all&cursor={}", m_steamAppID, 100, callCursor);
 		cpr::Response	response		= cpr::Get(cpr::Url{apiCall});
-		nlohmann::json	responseJson	= nlohmann::json::parse( response.text.c_str() );
+		json	responseJson	= json::parse( response.text.c_str() );
 
 		if( !responseJson.contains("reviews") )
 			break;
 
-		nlohmann::json	reviewsJson		= responseJson["reviews"];
+		json			reviewsJson		= responseJson["reviews"];
 		int				numReviews		= 0;
 		bool			reachedGoal		= false;
 
@@ -192,6 +195,10 @@ void cReviewsManager::DownloadReviews(uint64_t untilTimestamp)
 
 void cReviewsManager::ExportToCSV(const std::vector<tReview>& reviews)
 {
+	std::string dbName		= REVIEWS_DATABASE_NAME + "_" + m_steamAppID + ".csv";
+	
+	LOG( "Export aggregated reviews data to %s", dbName.c_str() );
+
 	const int	numReview	= (int) reviews.size();
 	int			numPositive	= 0;
 	std::map<std::string, std::pair<int,int>> dateToPositiveRatioMap;
@@ -216,8 +223,7 @@ void cReviewsManager::ExportToCSV(const std::vector<tReview>& reviews)
 	{
 		fileContent += key + "," + std::to_string(value.first) + "," + std::to_string(-value.second) + ",\n";
 	}
-
-	std::string dbName = REVIEWS_DATABASE_NAME + "_" + m_steamAppID + ".csv";
+		
 	std::ofstream csvFile( dbName );
 	csvFile.write( fileContent.c_str(), fileContent.size() );
 	csvFile.close();
@@ -237,5 +243,69 @@ std::string cReviewsManager::GetTimeFromTimestamp(uint64_t timestamp)
 	std::strftime(buffer, sizeof(buffer), "%d/%m/%Y", &currentTime_tm);
 
 	return buffer;
+}
+
+std::string cReviewsManager::SummarizeReviews(const std::vector<tReview>& reviews)
+{
+	LOG( "Call OpenAI to summarize reviews" );
+
+	std::string chatSystemMessage	= "Act as a helpful analyst that summarizes and analyses text excerpts from heterogenous sources in different languages. All your responses will be in English even if the review text is in other languages.";
+	std::string chatSummaryRequest	= "Review, summarize and compile by merging similar concepts the following texts that are individual reviews for a freemium application. All reviews are separated by ----- string.\n\n";
+
+	for( const auto& review : reviews )
+		chatSummaryRequest += review.review + "\n-----\n\n";
+	
+	json jsonChatBody;
+	jsonChatBody["model"] = "gpt-3.5-turbo";
+
+	json jsonSystemMessage;
+	jsonSystemMessage["role"] = "system";
+	jsonSystemMessage["content"] = chatSystemMessage;
+	jsonChatBody["messages"].push_back( jsonSystemMessage );
+
+	json jsonUserMessage;
+	jsonUserMessage["role"] = "user";
+	jsonUserMessage["content"] = chatSummaryRequest;
+	jsonChatBody["messages"].push_back( jsonUserMessage );
+
+	std::string		charAPICall		= "https://api.openai.com/v1/chat/completions";
+	cpr::Header		chatHeader		= 
+	{
+		{ "Content-Type", "application/json" },
+		{ "Authorization", std::format("Bearer {}", m_openAIKey ) }
+	};
+	cpr::Body		chatBody{ jsonChatBody.dump() };
+
+	cpr::Response	response		= cpr::Post(cpr::Url{charAPICall}, chatHeader, chatBody );
+
+	json responseJson = json::parse( response.text );
+
+	LOG( "Call to OpenAI done" );
+
+	return responseJson["choices"].at(0)["message"]["content"].dump();
+}
+
+void cReviewsManager::FormatAndExportSummary(std::string& summary)
+{
+	std::string		dbName = REVIEWS_DATABASE_NAME + "_" + m_steamAppID + "_summary.txt";
+
+	LOG( "Export reviews summary to %s", dbName.c_str() );
+
+	auto replaceEscapedNewlines = [](std::string& str)
+	{
+		size_t pos = str.find( "\\n" );
+
+		while (pos != std::string::npos)
+		{
+			str.replace( pos, 2, "\n");
+			pos = str.find( "\\n" );
+		}
+	};
+
+	replaceEscapedNewlines( summary );
+
+	std::ofstream	summaryFile( dbName );
+	summaryFile.write( summary.c_str(), summary.size() );
+	summaryFile.close();
 }
 

@@ -1,14 +1,12 @@
 #include "stdafx.h"
 #include "Logger.h"
-#include "cpr/cpr.h"
-#include "sqlite3.h"
 #include "ReviewsDB.h"
 #include "ReviewsManager.h"
 #include "ReviewDefs.h"
 
 #pragma comment(lib, "sqlite3.lib")
 
-#ifdef _NDEBUG
+#ifdef NDEBUG
 	#pragma comment(lib, "cpr.lib")
 	#pragma comment(lib, "libcurl_imp")
 	#pragma comment(lib, "curlu")
@@ -20,30 +18,79 @@
 	#pragma comment(lib, "zlib")
 #endif
 
-int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow)
+std::unordered_map<std::string,std::string> g_helperInputs =
 {
-	//const std::string apiCall = "http://store.steampowered.com/appreviews/1364390?json=1&filter=recent&day_range=7";
+	{ "-appid",		"" },
+	{ "-openaikey",	"" },
+	{ "-start",		"" },
+	{ "-end",		"" }
+};
 
-	//cpr::Response r = cpr::Get(cpr::Url{apiCall});
-	//LOG( "%s", r.text.c_str() );
+//int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine, int nCmdShow)
+int main(int argc, char* argv[])
+{
+	LOG( "Steam Reviews Helper Utility - downloads, caches and summarizes (w/ chatGPT 3.5) Steam reviews for an app identified by an steamappid." );
+	LOG( " - aggregated data exported to SteamReviews_appId.csv" );
+	LOG( " - chatGPT summary exported to SteamReviews_appId_summary.txt" );
+	LOG( " - queryable sqlite db exported to SteamReviews_appId.db" );
+	LOG( "" );
+	LOG( "Usage" );
+	LOG( "SteamReviewsHelper.exe -appid <steamAppId> -openaikey <openAI_API_Key> -start <dd/mm/yyyy> -end <dd/mm/yyyy>" );
+	LOG( "" );
+	LOG( "App log" );
+	LOG( "App started" );
+	int argIdx = 1;
 
-	//tReview rev;
-	//rev.steamid = 76561198067767552;
-	//rev.recommended = true;
-	//rev.review = "free, but I want a refund.";
+	while (argIdx < argc)
+	{
+		auto inputIt = g_helperInputs.find( argv[argIdx] );
 
-	//cReviewsDB reviews;
-	//reviews.Open( "reviews.db" );
-	//reviews.ResetReviewsTable();
-	//reviews.AddReviewEntry( rev );
+		if (inputIt != g_helperInputs.end() && argIdx + 1 < argc)
+		{
+			inputIt->second = argv[argIdx+1];
+			argIdx += 2;
+		}
+		else
+		{
+			LOG( "ignoring argument %s", argv[argIdx] );
+			argIdx++;
+		}
+	}
 
-	//https://store.steampowered.com/app/1364390
-	cReviewsManager::GetInstance()->Init( "1364390" );
-	//cReviewsManager::GetInstance()->ExportReviews( "01/10/2022", "30/10/2022" );
-	cReviewsManager::GetInstance()->ExportReviews( "01/10/2023", "31/10/2023" );
-	//cReviewsManager::GetInstance()->ExportReviews( "01/11/2023", "30/11/2023" );
-	cReviewsManager::GetInstance()->Cleanup();
-	cReviewsManager::DestroyInstance();
-	LOG( "shutdown" );
+	bool readyToRun = true;
+	
+	if (g_helperInputs["-appid"] == "")
+	{
+		LOG( "steam app id missing. aborting" );
+		readyToRun = false;
+	}
+
+	if (g_helperInputs["-openaikey"] == "")
+	{
+		LOG( "open AI Key missing - blank summary will be exported." );
+	}
+
+	if (g_helperInputs["-start"] == "")
+	{
+		LOG( "start date missing. aborting" );
+		readyToRun = false;
+	}
+
+	if (g_helperInputs["-end"] == "")
+	{
+		LOG( "end date missing. aborting" );
+		readyToRun = false;
+	}
+		
+	if (readyToRun)
+	{
+		cReviewsManager::GetInstance()->Init( g_helperInputs["-appid"], g_helperInputs["-openaikey"] );
+		cReviewsManager::GetInstance()->ExportReviews( g_helperInputs["-start"], g_helperInputs["-end"] );
+		cReviewsManager::GetInstance()->Cleanup();
+		cReviewsManager::DestroyInstance();
+	}
+
+	LOG( "App ended" );
+
 	return 0;
 }

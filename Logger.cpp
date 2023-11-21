@@ -48,6 +48,8 @@ void cLogger::Print(const std::string& fmt, ... )
 	_vsnprintf_s( szBuffer + bufferLen, MAX_LOG_SIZE - bufferLen - 1, MAX_LOG_SIZE - bufferLen - 1, "\n", args);
 	va_end(args);
 
+	std::cout << szBuffer;	//for console
+
 #ifdef _WIN32
 	OutputDebugStringA( szBuffer );
 #endif

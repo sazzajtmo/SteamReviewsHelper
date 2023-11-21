@@ -14,7 +14,7 @@ public:
 	bool		ResetReviewsTable();
 
 	bool		AddReviewEntry( const tReview& review );
-	void		GetOldestEntry( tReview& review );
+	void		GetFirstEntry( tReview& review, bool oldest = true ); //oldest == false, then newest entry
 	void		GetReviews( uint64_t startTimestamp, uint64_t endTimestamp, std::vector<tReview>& reviews );
 
 private:

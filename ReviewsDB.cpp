@@ -97,14 +97,14 @@ bool cReviewsDB::AddReviewEntry(const tReview& review)
 	return true;
 }
 
-void cReviewsDB::GetOldestEntry(tReview& review)
+void cReviewsDB::GetFirstEntry(tReview& review, bool oldest)
 {
 	if( !m_db )
 		return;
 
 	std::string sqlQuery = std::format( R"( 
-		select * from Reviews order by timestampCreated limit 1
-	)");
+		select * from Reviews order by timestampCreated {} limit 1
+	)", oldest ? "ASC" : "DESC" );
 
 	char* errMsg;
 	int execRet = sqlite3_exec( m_db, sqlQuery.c_str(), [](void *userData, int argc, char **argv, char **azColName) -> int 
@@ -114,9 +114,21 @@ void cReviewsDB::GetOldestEntry(tReview& review)
 		for (int i = 0; i < argc; i++)
 		{
 			if( strcmp( azColName[i], PROP_STEAMID ) == 0 )
-				reviewRef.steamid = std::atoll( argv[i] );
+				reviewRef.steamid = argv[i];
+			else if( strcmp( azColName[i], PROP_REVIEW ) == 0 )
+				reviewRef.review = argv[i];
+			else if( strcmp( azColName[i], PROP_RECOMMENDED ) == 0 )
+				reviewRef.recommended = std::atoi( argv[i] );
+			else if( strcmp( azColName[i], PROP_PLAYTIMEATREVIEW ) == 0 )
+				reviewRef.playtimeAtReview = std::atoi( argv[i] );
+			else if( strcmp( azColName[i], PROP_PLAYTIMEALLTIME ) == 0 )
+				reviewRef.playtimeAllTime = std::atoi( argv[i] );
 			else if( strcmp( azColName[i], PROP_TIMESTAMPCREATED ) == 0 )
 				reviewRef.timestampCreated = std::atoll( argv[i] );
+			else if( strcmp( azColName[i], PROP_TIMESTAMPUPDATED ) == 0 )
+				reviewRef.timestampUpdated = std::atoll( argv[i] );
+			else if( strcmp( azColName[i], PROP_TIMESTAMPLASTPLAYED ) == 0 )
+				reviewRef.timestampLastPlayed = std::atoll( argv[i] );
 		}
 				
 		return 0;
