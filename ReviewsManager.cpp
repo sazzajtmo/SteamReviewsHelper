@@ -7,6 +7,7 @@
 #include "json.hpp"
 #include <format>
 #include <sstream>
+#include <tuple>
 
 using json = nlohmann::json;
 
@@ -52,7 +53,8 @@ bool cReviewsManager::Init( const std::string& steamAppID, const std::string& op
 	if( !m_reviewsDB->Open( dbName ) )
 		return false;
 
-	m_reviewsDB->ResetReviewsTable();
+	m_reviewsDB->CreateReviewsTable();
+	m_reviewsDB->CreateNewsTable();
 
 	tReview firstEntry;
 	m_reviewsDB->GetFirstEntry( firstEntry, true );		//oldest
@@ -118,7 +120,10 @@ void cReviewsManager::ExportReviews(const std::string& startDate, const std::str
 	if( m_reviewsDB )
 		m_reviewsDB->GetReviews( startDateUTC, endDateUTC, reviews );
 
-	ExportToCSV( reviews );
+	std::vector<tNews> news;
+	GetNews( startDateUTC, endDateUTC, news );
+
+	ExportToCSV( reviews, news );
 
 	std::string	reviewsSummary = SummarizeReviews( reviews );
 
@@ -193,7 +198,7 @@ void cReviewsManager::DownloadReviews(uint64_t untilTimestamp)
 	}
 }
 
-void cReviewsManager::ExportToCSV(const std::vector<tReview>& reviews)
+void cReviewsManager::ExportToCSV(const std::vector<tReview>& reviews, const std::vector<tNews>& news)
 {
 	std::string dbName		= REVIEWS_DATABASE_NAME + "_" + m_steamAppID + ".csv";
 	
@@ -201,27 +206,40 @@ void cReviewsManager::ExportToCSV(const std::vector<tReview>& reviews)
 
 	const int	numReview	= (int) reviews.size();
 	int			numPositive	= 0;
-	std::map<std::string, std::pair<int,int>> dateToPositiveRatioMap;
+
+	using tDateEntry = std::tuple<int, int, std::string>;	//positives, negatives, news title
+
+	std::map<std::string, tDateEntry> steamDateInfoMap;
 
 	for (const auto& review : reviews)
 	{
 		numPositive += review.recommended;
-		dateToPositiveRatioMap[GetTimeFromTimestamp(review.timestampCreated)].first		+= review.recommended;
-		dateToPositiveRatioMap[GetTimeFromTimestamp(review.timestampCreated)].second	+= !review.recommended;
+
+		auto& [positives,negatives,title] = steamDateInfoMap[GetTimeFromTimestamp(review.timestampCreated)];
+
+		positives	+= review.recommended;
+		negatives	+= !review.recommended;
+	}
+
+	for (const auto& newsEntry : news)
+	{
+		auto& [positives,negatives,title] = steamDateInfoMap[GetTimeFromTimestamp(newsEntry.timestampPublished)];
+		title = newsEntry.title;
 	}
 
 	std::string	fileContent;
 
-	fileContent += "num reviews," + std::to_string(reviews.size()) + ",,\n";
-	fileContent += "positive reviews," + std::to_string(numPositive) + ",,\n";
-	fileContent += "negative reviews," + std::to_string(reviews.size()-numPositive) + ",,\n";
-	fileContent += "positive ratio," + std::to_string((float)numPositive/(float)reviews.size()) + ",,\n";
-	fileContent += ",,,\n";
-	fileContent += "Dates,Positives,Negatives,\n";
+	fileContent += "num reviews," + std::to_string(reviews.size()) + ",,,\n";
+	fileContent += "positive reviews," + std::to_string(numPositive) + ",,,\n";
+	fileContent += "negative reviews," + std::to_string(reviews.size()-numPositive) + ",,,\n";
+	fileContent += "positive ratio," + std::to_string((float)numPositive/(float)reviews.size()) + ",,,\n";
+	fileContent += ",,,,\n";
+	fileContent += "Dates,Positives,Negatives,News,\n";
 
-	for (const auto& [key, value] : dateToPositiveRatioMap)
+	for (const auto& [key, value] : steamDateInfoMap)
 	{
-		fileContent += key + "," + std::to_string(value.first) + "," + std::to_string(-value.second) + ",\n";
+		const auto& [positives,negatives,title] = value;
+		fileContent += key + "," + std::to_string(positives) + "," + std::to_string(-negatives) + "," + title + ",\n";
 	}
 		
 	std::ofstream csvFile( dbName );
@@ -307,5 +325,81 @@ void cReviewsManager::FormatAndExportSummary(std::string& summary)
 	std::ofstream	summaryFile( dbName );
 	summaryFile.write( summary.c_str(), summary.size() );
 	summaryFile.close();
+}
+
+void cReviewsManager::GetNews( uint64_t startTimestamp, uint64_t endTimestamp, std::vector<tNews>& news )
+{
+	LOG( "Download and cache news (steam and app news)" );
+
+	if (!m_reviewsDB)
+		return;
+
+	auto replaceQuotes = [](std::string& str)
+	{
+		size_t pos = str.find( '"' );
+
+		while (pos != std::string::npos)
+		{
+			str[pos] = '\'';
+			pos = str.find( '"', pos + 1 );
+		}
+	};
+
+	auto getOnlineNewsCount = []( const std::string& appId ) -> int
+	{
+		int count = 0;
+
+		std::string		apiCall			= std::format( "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/?appid={}&maxlength=20&count=1", appId );
+		cpr::Response	response		= cpr::Get(cpr::Url{apiCall});
+		json			responseJson	= json::parse( response.text.c_str() );
+
+		if( !responseJson.contains("appnews") )
+			return 0;
+
+		return responseJson["appnews"]["count"];
+	};
+
+	auto downloadAndCacheOnlineNews = [this, replaceQuotes]( const std::string& appId, int count )
+	{
+		std::string		apiCall			= std::format( "https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/?appid={}&maxlength=20&count={}", appId, count );
+		cpr::Response	response		= cpr::Get(cpr::Url{apiCall});
+		json			responseJson	= json::parse( response.text.c_str() );
+
+		if( !responseJson.contains("appnews") )
+			return;
+
+		json			newsItemsJson	= responseJson["appnews"]["newsitems"];
+
+		for (auto& newsItemJson : newsItemsJson.items())
+		{
+			const auto& newsItem = newsItemJson.value();
+
+			tNews newsEntry;
+
+			newsEntry.steamNewsId			= newsItem["gid"].dump();
+			replaceQuotes(newsEntry.steamNewsId);
+			newsEntry.title					= newsItem["title"].dump();
+			replaceQuotes(newsEntry.title);
+			newsEntry.source				= appId;
+			newsEntry.timestampPublished	= newsItem["date"];
+
+			m_reviewsDB->AddNewsEntry( newsEntry );
+
+			LOG( "downloaded news %s for app %s on %s", newsEntry.title.c_str(), newsEntry.source.c_str(), GetTimeFromTimestamp(newsEntry.timestampPublished).c_str());
+		}
+	};
+
+	int newSteamNewsCount		= getOnlineNewsCount( STEAM_GENERAL_NEWS_APP_ID );
+	int newAppNewsCount			= getOnlineNewsCount( m_steamAppID );
+	int cachedSteamNewsCount	= m_reviewsDB->GetNewsCountByAppId( STEAM_GENERAL_NEWS_APP_ID );
+	int cachedAppNewsCount		= m_reviewsDB->GetNewsCountByAppId( m_steamAppID );
+
+	if( newSteamNewsCount - cachedSteamNewsCount > 0 )
+		downloadAndCacheOnlineNews( STEAM_GENERAL_NEWS_APP_ID, newSteamNewsCount - cachedSteamNewsCount );
+
+	if( newAppNewsCount - cachedAppNewsCount > 0 )
+		downloadAndCacheOnlineNews( m_steamAppID, newSteamNewsCount - cachedSteamNewsCount );
+
+	m_reviewsDB->GetNews( startTimestamp, endTimestamp, news );
 }
 

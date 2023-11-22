@@ -22,10 +22,12 @@ public:
 
 private:
 	void							DownloadReviews( uint64_t untilTimestamp );
-	void							ExportToCSV( const std::vector<tReview>& reviews );
+	void							ExportToCSV( const std::vector<tReview>& reviews, const std::vector<tNews>& news );
 	std::string						GetTimeFromTimestamp( uint64_t timestamp );
 	std::string						SummarizeReviews( const std::vector<tReview>& reviews );
 	void							FormatAndExportSummary( std::string& summary );
+
+	void							GetNews( uint64_t startTimestamp, uint64_t endTimestamp, std::vector<tNews>& news );
 		
 private:	
 	static	cReviewsManager*		s_instance;

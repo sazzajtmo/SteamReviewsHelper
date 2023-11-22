@@ -22,3 +22,18 @@ struct tReview
 #define PROP_TIMESTAMPCREATED		"timestampCreated"
 #define PROP_TIMESTAMPUPDATED		"timestampUpdated"
 #define PROP_TIMESTAMPLASTPLAYED	"timestampLastPlayed"
+
+struct tNews
+{
+	std::string	steamNewsId				= "";	//news unique id
+	std::string	title					= "";
+	std::string	source					= "";	//appid (steam news have appid 593110)
+	uint64_t	timestampPublished		= 0u;
+};
+
+#define STEAM_GENERAL_NEWS_APP_ID	"593110"
+
+#define PROP_NEWSID					"steamNewsId"
+#define PROP_NEWSTITLE				"title"
+#define PROP_NEWSSOURCE				"appId"
+#define PROP_NEWSTIMESTAMPPUBLISHED	"timestampPublished"
