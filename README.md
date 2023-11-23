@@ -22,3 +22,9 @@ _SteamReviewsHelper.exe -appid <steamAppId> -openaikey <openAI_API_Key> -start <
 
 Free to use and modify as you please for all types of projects. No acknowledgment is required.
 
+# Third-party code
+
+This software uses the following libraries and code:
+* C++ Requests: Curl for People - libcpr - https://github.com/libcpr/cpr
+* SQLite - https://www.sqlite.org/copyright.html
+* JSON for Modern C++ - https://github.com/nlohmann/json
