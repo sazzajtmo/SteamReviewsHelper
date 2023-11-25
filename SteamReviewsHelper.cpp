@@ -70,15 +70,17 @@ int main(int argc, char* argv[])
 		LOG( "open AI Key missing - blank summary will be exported." );
 	}
 
-	if (g_helperInputs["-start"] == "")
+	std::regex dateRegexDDMMYYYY("\\b\\d{2}/\\d{2}/\\d{4}\\b");
+
+	if (g_helperInputs["-start"] == "" || !std::regex_match(g_helperInputs["-start"], dateRegexDDMMYYYY) )
 	{
-		LOG( "start date missing. aborting" );
+		LOG( "start date missing or misformatted. aborting" );
 		readyToRun = false;
 	}
 
-	if (g_helperInputs["-end"] == "")
+	if (g_helperInputs["-end"] == "" || !std::regex_match(g_helperInputs["-end"], dateRegexDDMMYYYY))
 	{
-		LOG( "end date missing. aborting" );
+		LOG( "end date missing or misformatted. aborting" );
 		readyToRun = false;
 	}
 		

@@ -300,6 +300,12 @@ std::string cReviewsManager::SummarizeReviews(const std::vector<tReview>& review
 
 	LOG( "Call to OpenAI done" );
 
+	if (responseJson.contains("error"))
+	{
+		LOG( "OpenAI error %s", response.text.c_str() );
+		return response.text;
+	}
+
 	return responseJson["choices"].at(0)["message"]["content"].dump();
 }
 
